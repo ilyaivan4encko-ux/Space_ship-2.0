@@ -379,7 +379,15 @@ body, html {
 
             // Позиция спавна (далеко впереди)
             // X: от -10 до 10
-            obs.position.x = (Math.random() * 20) - 10;
+            // На каком расстоянии впереди спавнится объект
+const spawnZ = player.position.z - 80;
+
+// Вычисляем ширину видимой зоны камеры на этом расстоянии:
+const frustumHeight = 2 * Math.tan((camera.fov * Math.PI / 180) / 2) * Math.abs(camera.position.z - spawnZ);
+const frustumWidth = frustumHeight * camera.aspect;
+
+// Выбираем случайную X позицию по всей видимой ширине
+obs.position.x = (Math.random() * frustumWidth) - (frustumWidth / 2);
             obs.position.z = player.position.z - 80 - (Math.random() * 20);
 
             // Y позиция
