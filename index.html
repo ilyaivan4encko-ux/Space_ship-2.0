@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>NEON VOID - 3D Runner (Levels + LocalSave)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Courier New', Courier, monospace; }
+        canvas { display: block; }
+
+        /* UI Оверлей */
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        .hud-top {
+            display: flex;
+            justify-content: space-between;
+            color: #00ffff;
+            text-shadow: 0 0 10px #00ffff;
+            font-size: 24px;
+            font-weight: bold;
+        }
+
+        .hud-center {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            display: none; /* Скрыто во время игры */
+        }
+
+        h1 {
+            font-size: 60px;
+            color: #ff00ff;
+            text-shadow: 0 0 20px #ff00ff;
+            margin: 0;
+            letter-spacing: 5px;
+        }
+
+        p { color: white; font-size: 18px; }
+
+        .health-bar-container {
+            width: 300px;
+            height: 20px;
+            border: 2px solid #ff00ff;
+            background: rgba(0,0,0,0.5);
+            margin-top: 10px;
+        }
+
+        #health-fill {
+            width: 100%;
+            height: 100%;
+            background: #ff00ff;
+            box-shadow: 0 0 10px #ff00ff;
+            transition: width 0.2s;
+        }
+
+        .controls-hint {
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 14px;
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+        }
+
+        /* Анимации UI */
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.1); opacity: 0.8; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .pulse-text { animation: pulse 1.5s infinite; }
+
+        #start-screen { pointer-events: auto; background: rgba(0,0,0,0.7); width: 100%; height: 100%; position: absolute; top:0; left:0; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 10; }
+        #game-over-screen { display: none; pointer-events: auto; background: rgba(50, 0, 0, 0.8); width: 100%; height: 100%; position: absolute; top:0; left:0; flex-direction: column; align-items: center; justify-content: center; z-index: 11; padding: 20px; box-sizing: border-box; }
+
+        button {
+            background: transparent;
+            border: 2px solid #00ffff;
+            color: #00ffff;
+            padding: 15px 40px;
+            font-size: 20px;
+            cursor: pointer;
+            font-family: inherit;
+            margin-top: 20px;
+            transition: 0.3s;
+            text-transform: uppercase;
+        }
+        button:hover { background: #00ffff; color: #000; box-shadow: 0 0 20px #00ffff; }
+
+body, html {
+    touch-action: none;
+    overscroll-behavior: none;
+}
+        #level-indicator {
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+            top: 18px;
+            color: #fff;
+            font-weight: 700;
+            text-shadow: 0 0 8px rgba(255,255,255,0.06);
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div class="hud-top">
+            <div>
+                SCORE: <span id="score-val">0</span>
+                <div style="font-size: 14px; color: #aaa;">DISTANCE: <span id="dist-val">0</span>m</div>
+            </div>
+            <div style="text-align: right;">
+                SHIELD INTEGRITY
+                <div class="health-bar-container">
+                    <div id="health-fill"></div>
+                </div>
+            </div>
+        </div>
+        <div id="level-indicator">LEVEL: 1</div>
+        <div class="controls-hint">
+            [MOUSE] Move • [SHIFT] Turbo Boost • [SPACE] Brake
+        </div>
+    </div>
+
+    <div id="start-screen">
+        <h1>NEON VOID</h1>
+        <p>Cyberpunk Infinite Runner</p>
+        <p style="color:#0ff; font-size:20px; margin-top:10px;">
+            BEST SCORE: <span id="best-score-start">0</span>
+        </p>
+        <button onclick="startGame()">INITIATE SYSTEM</button>
+    </div>
+
+    <div id="game-over-screen">
+        <h1 style="color: red; text-shadow: 0 0 20px red;">CRITICAL FAILURE</h1>
+        <p>FINAL SCORE: <span id="final-score">0</span></p>
+        <p style="color:#0ff; font-size:18px;">BEST SCORE: <span id="best-score-game">0</span></p>
+        <button onclick="resetGame()">REBOOT SYSTEM</button>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <script>
+        // --- ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ---
+        let scene, camera, renderer;
+        let player, gridHelper, floor;
+        let obstacles = [];
+        let particles = [];
+        let isGameRunning = false;
+        let score = 0;
+        let distance = 0;
+        let health = 100;
+        let speed = 0.5;
+        let baseSpeed = 0.5;
+        let difficultyMultiplier = 1;
+
+        // LEVEL SYSTEM (user requested: every 20000 score)
+        let level = 1;
+        const nextLevelScoreStep = 20000; // каждые 20000 score
+        let nextLevelScore = nextLevelScoreStep;
+        const levelColors = [
+            { grid: 0xff00ff, line: 0x220022, obstacles: [0xff0055, 0xffff00, 0x00ff00], player: 0x00ffff, engine: 0xff00ff },
+            { grid: 0x00ffff, line: 0x002222, obstacles: [0x00aaff, 0x00ffaa, 0xffff55], player: 0x7fffff, engine: 0x00aaff },
+            { grid: 0x00ff88, line: 0x003311, obstacles: [0x00ff44, 0x44ff00, 0xffffaa], player: 0x55ffcc, engine: 0x22ff88 },
+            { grid: 0xff8800, line: 0x331100, obstacles: [0xff5500, 0xffaa00, 0xffff55], player: 0xffcc88, engine: 0xff7700 },
+            { grid: 0x8888ff, line: 0x111133, obstacles: [0x6666ff, 0x9999ff, 0xff99ff], player: 0x99bbff, engine: 0xff99ff }
+        ];
+
+        // --- LOCAL STORAGE SCORE ---
+        let bestScore = localStorage.getItem("bestScore") ? Number(localStorage.getItem("bestScore")) : 0;
+        document.addEventListener("DOMContentLoaded", () => {
+            const bestStart = document.getElementById("best-score-start");
+            if (bestStart) bestStart.innerText = bestScore;
+        });
+
+        // Настройки мыши
+        let mouseX = 0;
+        let targetX = 0;
+        let windowHalfX = window.innerWidth / 2;
+
+        // Ввод
+        let keys = { Shift: false, Space: false };
+
+        // Инициализация
+        function init() {
+            // Сцена и камера
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x000000);
+            scene.fog = new THREE.FogExp2(0x000000, 0.015); // Туман для скрытия горизонта
+
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.set(0, 3, 6);
+            camera.lookAt(0, 0, -5);
+
+            // Рендерер
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.shadowMap.enabled = true;
+            document.body.appendChild(renderer.domElement);
+
+            // Свет
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0xff00ff, 0.8);
+            dirLight.position.set(5, 10, 7);
+            scene.add(dirLight);
+
+            // Свет от игрока
+            const playerLight = new THREE.PointLight(0x00ffff, 1, 20);
+            playerLight.position.set(0, 2, 0);
+            scene.add(playerLight);
+
+            // Создание объектов мира
+            createPlayer();
+            createEnvironment();
+
+            // Слушатели событий
+            // ---- ТАЧ-УПРАВЛЕНИЕ ДЛЯ МОБИЛЬНЫХ ----
+
+            let touchX = null;
+
+            function handleTouchStart(e) {
+                if (!isGameRunning) return;
+
+                if (e.touches.length === 1) {
+                    const t = e.touches[0];
+
+                    // Тормоз если палец в нижней части экрана
+                    if (t.clientY > window.innerHeight * 0.75) {
+                        keys.Space = true;
+                    }
+
+                    // Движение
+                    touchX = t.clientX;
+                    mouseX = (touchX - windowHalfX); // Переводим в систему управления игроком
+                }
+
+                // Turbo если два пальца
+                if (e.touches.length === 2) {
+                    keys.Shift = true;
+                }
+            }
+
+            function handleTouchMove(e) {
+                if (!isGameRunning) return;
+
+                if (e.touches.length >= 1) {
+                    const t = e.touches[0];
+                    touchX = t.clientX;
+                    mouseX = (touchX - windowHalfX);
+                }
+            }
+
+            function handleTouchEnd(e) {
+                // Сбрасываем Shift если остался 1 палец
+                if (e.touches.length < 2) {
+                    keys.Shift = false;
+                }
+                // Сбрасываем тормоз если 0 пальцев или палец ушёл из низа
+                if (e.touches.length === 0) {
+                    keys.Space = false;
+                }
+            }
+
+            // Подключение обработчиков
+            document.addEventListener("touchstart", handleTouchStart);
+            document.addEventListener("touchmove", handleTouchMove);
+            document.addEventListener("touchend", handleTouchEnd);
+            document.addEventListener("touchcancel", handleTouchEnd);
+            document.addEventListener('mousemove', onDocumentMouseMove, false);
+            window.addEventListener('resize', onWindowResize, false);
+            document.addEventListener('keydown', (e) => { if(e.key === "Shift") keys.Shift = true; if(e.code === "Space") keys.Space = true; });
+            document.addEventListener('keyup', (e) => { if(e.key === "Shift") keys.Shift = false; if(e.code === "Space") keys.Space = false; });
+
+            animate();
+        }
+
+        // --- СОЗДАНИЕ ОБЪЕКТОВ ---
+
+        function createPlayer() {
+            // Игрок - это футуристический корабль из примитивов
+            const geometry = new THREE.ConeGeometry(0.5, 2, 4); // Корпус
+            const material = new THREE.MeshPhongMaterial({ 
+                color: levelColors[(level-1)%levelColors.length].player, 
+                emissive: 0x005555,
+                shininess: 100,
+                flatShading: true
+            });
+
+            player = new THREE.Mesh(geometry, material);
+            player.rotation.x = -Math.PI / 2;
+            player.position.y = 1;
+            player.castShadow = true;
+
+            // Двигатели (светящиеся сферы)
+            const engineGeo = new THREE.SphereGeometry(0.2, 8, 8);
+            const engineMat = new THREE.MeshBasicMaterial({ color: levelColors[(level-1)%levelColors.length].engine });
+            const engineL = new THREE.Mesh(engineGeo, engineMat);
+            engineL.position.set(-0.3, -0.8, 0.2);
+            const engineR = new THREE.Mesh(engineGeo, engineMat);
+            engineR.position.set(0.3, -0.8, 0.2);
+
+            player.add(engineL);
+            player.add(engineR);
+
+            scene.add(player);
+        }
+
+        function createEnvironment() {
+            // Бесконечный пол (сетка)
+            createGridForLevel(level);
+
+            // Зеркальный пол под сеткой для красоты
+            const planeGeo = new THREE.PlaneGeometry(200, 200);
+            const planeMat = new THREE.MeshBasicMaterial({ color: 0x050005 });
+            floor = new THREE.Mesh(planeGeo, planeMat);
+            floor.rotation.x = -Math.PI / 2;
+            floor.position.y = -0.1;
+            scene.add(floor);
+        }
+
+        function createGridForLevel(lv) {
+            if (gridHelper) {
+                scene.remove(gridHelper);
+                gridHelper.geometry.dispose && gridHelper.geometry.dispose();
+                if (Array.isArray(gridHelper.material)) {
+                    gridHelper.material.forEach(m => m.dispose && m.dispose());
+                } else if (gridHelper.material) {
+                    gridHelper.material.dispose && gridHelper.material.dispose();
+                }
+                gridHelper = null;
+            }
+
+            const cols = levelColors[(lv-1)%levelColors.length];
+            const gridLimit = 200;
+            const gridDivisions = 200;
+            gridHelper = new THREE.GridHelper(gridLimit, gridDivisions, cols.grid, cols.line);
+            gridHelper.position.y = 0;
+            gridHelper.position.z = -50;
+            scene.add(gridHelper);
+        }
+
+        function spawnObstacle() {
+            // Случайный тип препятствия
+            const type = Math.floor(Math.random() * 3);
+            let geometry, material;
+            const cols = levelColors[(level-1)%levelColors.length];
+            const randomCol = cols.obstacles[Math.floor(Math.random() * cols.obstacles.length)];
+
+            if (type === 0) { // Высокая башня
+                geometry = new THREE.BoxGeometry(1, Math.random() * 5 + 2, 1);
+                material = new THREE.MeshPhongMaterial({ color: randomCol, emissive: randomCol & 0x111111 });
+            } else if (type === 1) { // Низкий блок
+                geometry = new THREE.BoxGeometry(3, 1, 1);
+                material = new THREE.MeshPhongMaterial({ color: randomCol, emissive: randomCol & 0x111111 });
+            } else { // Плавающий ромб
+                geometry = new THREE.OctahedronGeometry(0.8);
+                material = new THREE.MeshPhongMaterial({ color: randomCol, emissive: randomCol & 0x111111 });
+            }
+
+            const obs = new THREE.Mesh(geometry, material);
+
+            // Позиция спавна (далеко впереди)
+            // X: от -10 до 10
+            obs.position.x = (Math.random() * 20) - 10;
+            obs.position.z = player.position.z - 80 - (Math.random() * 20);
+
+            // Y позиция
+            if (type === 2) obs.position.y = 1.5; // Летающий
+            else obs.position.y = geometry.parameters && geometry.parameters.height ? geometry.parameters.height / 2 : 1;
+
+            obs.castShadow = true;
+            obs.receiveShadow = true;
+
+            scene.add(obs);
+            obstacles.push(obs);
+        }
+
+        function createParticles() {
+            // Эффект скорости (частицы, летящие навстречу)
+            if (Math.random() > 0.5) return; // Не каждый кадр
+
+            const geo = new THREE.BoxGeometry(0.05, 0.05, 0.5);
+            const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6 });
+            const part = new THREE.Mesh(geo, mat);
+
+            part.position.x = (Math.random() * 40) - 20;
+            part.position.y = (Math.random() * 10);
+            part.position.z = player.position.z - 60;
+
+            scene.add(part);
+            particles.push(part);
+        }
+
+        // --- ЛОГИКА ИГРЫ ---
+
+        function update() {
+            if (!isGameRunning) return;
+
+            // Управление скоростью
+            let currentSpeed = baseSpeed + (distance * 0.0001); // Постепенное ускорение
+            if (keys.Shift) {
+                currentSpeed *= 2.0; // Турбо
+                camera.fov = 75; // Эффект скорости
+            } else if (keys.Space) {
+                currentSpeed *= 0.5; // Торможение
+                camera.fov = 55;
+            } else {
+                camera.fov = 60;
+            }
+            camera.updateProjectionMatrix();
+
+            speed = currentSpeed;
+            distance += speed;
+            score += Math.round(speed * 10);
+
+            // LEVEL CHECK (по score)
+            if (score >= nextLevelScore) {
+                level++;
+                nextLevelScore += nextLevelScoreStep;
+                applyLevelColors(level);
+            }
+
+            // Движение игрока
+            // Плавное следование за мышью (интерполяция)
+            targetX = (mouseX / window.innerWidth) * 20; // Диапазон движения
+            player.position.x += (targetX - player.position.x) * 0.1;
+
+            // Наклон корабля при повороте
+            player.rotation.z = -(targetX - player.position.x) * 0.5;
+
+            // Анимация корабля (покачивание)
+            player.position.y = 1 + Math.sin(distance * 0.1) * 0.1;
+
+            // Движение мира (иллюзия движения: мы двигаем пол и объекты к игроку)
+            // Но в Three.js лучше двигать игрока или двигать объекты.
+            // Здесь мы будем двигать сетку и объекты "навстречу" Z.
+
+            // Сброс сетки для эффекта бесконечности
+            gridHelper.position.z += speed;
+            if (gridHelper.position.z > 0) gridHelper.position.z = -50;
+
+            // Управление препятствиями
+            // 1. Спавн
+            if (Math.random() < 0.05 + (distance * 0.00001)) { // Шанс спавна растет
+                spawnObstacle();
+            }
+
+            // 2. Движение и удаление
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                let ob = obstacles[i];
+                ob.position.z += speed;
+
+                // Вращение для красоты
+                ob.rotation.x += 0.01;
+                ob.rotation.y += 0.01;
+
+                // Проверка столкновений (AABB - Axis-Aligned Bounding Box упрощенно)
+                // Расстояние между игроком и объектом
+                let distToPlayer = ob.position.distanceTo(player.position);
+
+                // Если близко по Z и по X
+                if (Math.abs(ob.position.z - player.position.z) < 2 && Math.abs(ob.position.x - player.position.x) < 1.5) {
+                    takeDamage();
+                    scene.remove(ob);
+                    obstacles.splice(i, 1);
+                    continue;
+                }
+
+                // Удаление, если пролетел за камеру
+                if (ob.position.z > 10) {
+                    scene.remove(ob);
+                    obstacles.splice(i, 1);
+                }
+            }
+
+            // Частицы
+            createParticles();
+            for (let i = particles.length - 1; i >= 0; i--) {
+                let p = particles[i];
+                p.position.z += speed * 2; // Частицы летят быстрее
+                if (p.position.z > 10) {
+                    scene.remove(p);
+                    particles.splice(i, 1);
+                }
+            }
+
+            // Обновление UI
+            document.getElementById('score-val').innerText = score;
+            document.getElementById('dist-val').innerText = Math.floor(distance);
+            document.getElementById('health-fill').style.width = health + '%';
+            document.getElementById('level-indicator').innerText = 'LEVEL: ' + level;
+
+            // Смена цвета здоровья
+            if (health < 30) document.getElementById('health-fill').style.background = 'red';
+            else document.getElementById('health-fill').style.background = '#ff00ff';
+        }
+
+        function applyLevelColors(lv) {
+            const cols = levelColors[(lv-1)%levelColors.length];
+
+            // Пересоздаём сетку с новым цветом
+            createGridForLevel(lv);
+
+            // Перекрашиваем существующие препятствия
+            obstacles.forEach(o => {
+                try {
+                    const newCol = cols.obstacles[Math.floor(Math.random()*cols.obstacles.length)];
+                    o.material.color.setHex(newCol);
+                    if (o.material.emissive) o.material.emissive.setHex(newCol & 0x111111);
+                } catch (e) {}
+            });
+
+            // Меняем цвет игрока material и двигателей
+            try {
+                if (player && player.material) {
+                    player.material.color.setHex(cols.player);
+                    // engines are children (spheres) - recolor them
+                    player.children.forEach((ch, idx) => {
+                        if (ch.material) ch.material.color.setHex(cols.engine);
+                    });
+                }
+            } catch(e){}
+
+            // Небольшой визуальный флеш / уведомление
+            flashLevelText(lv);
+        }
+
+        function flashLevelText(lv) {
+            const el = document.getElementById('level-indicator');
+            const prev = el.style.color;
+            el.style.color = '#fff';
+            el.style.textShadow = '0 0 18px rgba(255,255,255,0.9)';
+            setTimeout(()=> {
+                el.style.color = '';
+                el.style.textShadow = '';
+            }, 900);
+        }
+
+        function takeDamage() {
+            health -= 20;
+
+            // Тряска камеры
+            camera.position.x = (Math.random() - 0.5) * 1;
+            camera.position.y = 3 + (Math.random() - 0.5) * 1;
+            setTimeout(() => {
+                camera.position.set(0, 3, 6); // Возврат
+            }, 100);
+
+            // Вспышка экрана (через фон сцены)
+            scene.background = new THREE.Color(0x550000);
+            setTimeout(() => { scene.background = new THREE.Color(0x000000); }, 50);
+
+            if (health <= 0) {
+                gameOver();
+            }
+        }
+
+        function startGame() {
+            document.getElementById('start-screen').style.display = 'none';
+            resetValues();
+            isGameRunning = true;
+        }
+
+        function gameOver() {
+            isGameRunning = false;
+
+            // обновляем рекорд
+            if (score > bestScore) {
+                bestScore = score;
+                localStorage.setItem("bestScore", bestScore);
+            }
+
+            // показываем рекорд
+            document.getElementById('final-score').innerText = score;
+            document.getElementById('best-score-game').innerText = bestScore;
+            document.getElementById('start-screen').style.display = 'none';
+            document.getElementById('game-over-screen').style.display = 'flex';
+        }
+
+        function resetGame() {
+            document.getElementById('game-over-screen').style.display = 'none';
+            resetValues();
+
+            // Очистка сцены от препятствий
+            obstacles.forEach(o => scene.remove(o));
+            obstacles = [];
+
+            isGameRunning = true;
+        }
+
+        function resetValues() {
+            score = 0;
+            distance = 0;
+            health = 100;
+            baseSpeed = 0.5;
+            player.position.x = 0;
+            document.getElementById('health-fill').style.background = '#ff00ff';
+            level = 1;
+            nextLevelScore = nextLevelScoreStep;
+            // reset grid / player colors to level 1
+            applyLevelColors(level);
+            // update UI best score display on start screen
+            const bestStart = document.getElementById("best-score-start");
+            if (bestStart) bestStart.innerText = bestScore;
+        }
+
+        // --- ОБРАБОТЧИКИ СОБЫТИЙ ---
+
+        function onWindowResize() {
+            windowHalfX = window.innerWidth / 2;
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function onDocumentMouseMove(event) {
+            mouseX = (event.clientX - windowHalfX);
+        }
+
+        // --- ГЛАВНЫЙ ЦИКЛ ---
+
+        function animate() {
+            requestAnimationFrame(animate);
+            update();
+            renderer.render(scene, camera);
+        }
+
+        // Запуск
+        init();
+
+    </script>
+</body>
+</html>
